@@ -161,6 +161,10 @@ class ExtendedTrainer:
         self.model.train()
         total_loss = 0
         for sequences_tensor, targets_tensor in train_loader:
+            # Move tensors to GPU
+            sequences_tensor = sequences_tensor.to('cuda:0')
+            targets_tensor = targets_tensor.to('cuda:0')
+
             outputs = self.model(sequences_tensor)
             loss = self.criterion(outputs, targets_tensor)
             self.optimizer.zero_grad()
