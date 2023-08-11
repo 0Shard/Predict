@@ -60,7 +60,7 @@ class DataProcessor:
         return data_processed
 
     @staticmethod
-    def load_and_preprocess_data(filename, lookback, batch_size=32, validation_split=0.3):
+    def load_and_preprocess_data(filename, lookback, window_size, step_size, batch_size=32):
         data = pd.read_csv(filename, skiprows=1)
         data = DataProcessor.process_dataframe(data)
         data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
@@ -99,14 +99,23 @@ class DataProcessor:
 
         # Create PyTorch datasets and data loaders
         dataset = TensorDataset(X_tensor, Y_tensor)
-        train_size = int((1 - validation_split) * len(dataset))
-        val_size = len(dataset) - train_size
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+        train_size = int(0.7 * len(dataset))
+        val_size = int(0.2 * len(dataset))
+        test_size = len(dataset) - train_size - val_size
+        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset,[train_size, val_size, test_size])
 
-        train_loader = DataLoader(train_dataset, shuffle=False, batch_size=batch_size)
-        val_loader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size)
+        # Rolling window for train and validation
+        train_loaders, val_loaders = [], []
+        for start_idx in range(0, len(train_dataset) - window_size + 1, step_size):
+            end_idx = start_idx + window_size
+            train_subset = torch.utils.data.Subset(train_dataset, range(start_idx, end_idx))
+            val_subset = torch.utils.data.Subset(val_dataset, range(start_idx, end_idx))
+            train_loaders.append(DataLoader(train_subset, shuffle=False, batch_size=batch_size))
+            val_loaders.append(DataLoader(val_subset, shuffle=False, batch_size=batch_size))
 
-        return scaler, scaler_close, train_loader, val_loader, data['Close'].values
+        test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
+
+        return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
@@ -191,15 +200,24 @@ class ExtendedTrainer:
         avg_loss = total_loss / len(train_loader)
         self.training_loss.append(avg_loss)
 
-    def validate(self, val_data):
-        # Placeholder for now. You can expand this to evaluate the model on validation data.
-        pass
+    def validate(self, val_loader):
+        self.model.eval()
+        total_val_loss = 0.0
+        with torch.no_grad():
+            for sequences_tensor, targets_tensor in val_loader:
+                sequences_tensor = sequences_tensor.to('cuda:0')
+                targets_tensor = targets_tensor.to('cuda:0')
+                outputs = self.model(sequences_tensor)
+                loss = self.criterion(outputs, targets_tensor)
+                total_val_loss += loss.item()
+        avg_val_loss = total_val_loss / len(val_loader)
+        return avg_val_loss
 
     def test(self, test_data):
         # Placeholder for now. You can expand this to evaluate the model on test data.
         pass
 
-    def train(self, train_data, val_data, test_data, num_epochs):
+    def train(self, train_loaders, val_loaders, test_loader, num_epochs):
         start_epoch = 0
         continue_training = input("Would you like to continue training from a checkpoint? (yes/no): ").strip().lower()
         if continue_training == 'yes':
@@ -207,11 +225,20 @@ class ExtendedTrainer:
             start_epoch, _ = self.checkpoint_manager.load_checkpoint(checkpoint_file, self.model, self.optimizer)
 
         for epoch in range(start_epoch, num_epochs):
-            self.train_epoch(train_data)
-            self.validate(val_data)
+            total_val_loss = 0.0
+            # Use each rolling window for training and validation
+            for train_loader, val_loader in zip(train_loaders, val_loaders):
+                self.train_epoch(train_loader)
+                val_loss = self.validate(val_loader)
+                total_val_loss += val_loss
+
+            avg_val_loss = total_val_loss / len(val_loaders)
+            print(f"Epoch {epoch}/{num_epochs} - Avg Validation Loss: {avg_val_loss:.4f}")
+
             self.checkpoint_manager.save_checkpoint(epoch, self.model, self.optimizer, self.training_loss[-1])
             self.scheduler.step()  # Adjust the learning rate
-        self.test(test_data)
+
+        self.test(test_loader)
 
 # Main Execution
 csv_file_path = input("Please provide the path to the CSV file: ")
@@ -225,7 +252,7 @@ batch_size = 32
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 # Load and preprocess data
-scaler, train_loader, val_loader, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, batch_size)
+scaler, scaler_close, train_loaders, val_loaders, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 30, 7, batch_size)
 
 # Initialize model and optimizer
 model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
@@ -241,7 +268,7 @@ trainer = ExtendedTrainer(model, optimizer, scheduler, lookback, 7, 30, 7, check
 
 
 try:
-    trainer.train(train_loader, val_loader, test_loader, 100)  # Train for 100 epochs as an example
+    trainer.train(train_loaders, val_loaders, test_loader, 100)  # Train for 100 epochs as an example
 except RuntimeError as e:
     if "out of memory" in str(e):
         print("ERROR: GPU out of memory. Try reducing the batch size or model size.")
