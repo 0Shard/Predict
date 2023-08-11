@@ -184,7 +184,7 @@ class ModelManager:
 
 
 class CustomLSTMModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
+    def __init__(self, input_dim, hidden_dims, dropouts, output_dim):
         super(CustomLSTMModel, self).__init__()
         self.lstm1 = nn.LSTM(input_dim, hidden_dims[0], batch_first=True)
         self.dropout1 = nn.Dropout(dropouts[0])
@@ -193,7 +193,7 @@ class CustomLSTMModel(nn.Module):
         self.dropout2 = nn.Dropout(dropouts[1])
 
         self.lstm3 = nn.LSTM(hidden_dims[1], hidden_dims[2], batch_first=True)
-        self.fc = nn.Linear(hidden_dim, output_dim)
+        self.fc = nn.Linear(hidden_dims[2], output_dim)
 
     def forward(self, x):
         x, _ = self.lstm1(x)
