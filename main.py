@@ -122,7 +122,6 @@ def load_and_preprocess_data(filename, lookback, batch_size=32):
     total_size = len(X)
     train_size = int(0.7 * total_size)
     val_size = int(0.2 * total_size)
-    test_size = total_size - train_size - val_size
 
     X_train, Y_train = X[:train_size], Y[:train_size]
     X_val, Y_val = X[train_size:train_size + val_size], Y[train_size:train_size + val_size]
