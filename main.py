@@ -3,10 +3,14 @@ import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
 import os
-from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
+
+
+# Check if GPU is available
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available. Please ensure you have a GPU and CUDA installed.")
 
 # --- Data Preprocessing ---
 
@@ -185,6 +189,8 @@ class ExtendedTrainer:
 # Main Execution
 csv_file_path = input("Please provide the path to the CSV file: ")
 checkpoint_dir = input("Please provide the directory for saving checkpoints: ")
+
+# Define lookback and batch_size
 lookback = 30
 batch_size = 32
 
@@ -197,12 +203,22 @@ scaler, train_loader, val_loader, test_loader, close_values = DataProcessor.load
 # Initialize model and optimizer
 model, optimizer = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
 
+# Move the model to GPU
+model.to('cuda:0')
+
 # Create checkpoint manager
 checkpoint_manager = CheckpointManager(checkpoint_dir)
 
 # Train the model
-trainer = ExtendedTrainer(model, optimizer, 30, 7, 30, 7, checkpoint_manager)
-trainer.train(train_loader, val_loader, test_loader, 100)  # Train for 100 epochs as an example
+trainer = ExtendedTrainer(model, optimizer, lookback, 7, 30, 7, checkpoint_manager)
+
+try:
+    trainer.train(train_loader, val_loader, test_loader, 100)  # Train for 100 epochs as an example
+except RuntimeError as e:
+    if "out of memory" in str(e):
+        print("ERROR: GPU out of memory. Try reducing the batch size or model size.")
+    else:
+        raise e
 
 # Save the model after training
 torch.save(model.state_dict(), "final_model.pth")
