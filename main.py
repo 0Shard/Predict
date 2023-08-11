@@ -266,7 +266,7 @@ os.makedirs(checkpoint_dir, exist_ok=True)
 scaler, scaler_close, train_loaders, val_loaders, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 30, 7, batch_size)
 
 # Initialize model and optimizer
-model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
+model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(10, [32, 64, 64], [0.2, 0.2], 7)
 
 # Move the model to GPU
 model.to('cuda:0')
