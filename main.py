@@ -6,6 +6,8 @@ import os
 from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
+from torch.optim.lr_scheduler import StepLR
+
 
 
 # Check if GPU is available
@@ -58,7 +60,7 @@ class DataProcessor:
         return data_processed
 
     @staticmethod
-    def load_and_preprocess_data(filename, lookback, batch_size):
+    def load_and_preprocess_data(filename, lookback, batch_size=32, validation_split=0.3):
         data = pd.read_csv(filename, skiprows=1)
         data = DataProcessor.process_dataframe(data)
         data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
@@ -69,31 +71,42 @@ class DataProcessor:
         data['Day'] = data['Date'].dt.day.astype(float)
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
-        inputs, targets = [], []
+
+        # Shift all columns except 'Close'
+        for column in ['Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
+            data[f'Historical {column}'] = data[column].shift(lookback)
+
+        data.drop(data.head(lookback).index, inplace=True)
+        data.dropna(inplace=True)
+
+        # Use a separate scaler for 'Close'
+        scaler_close = MinMaxScaler(feature_range=(-1, 1))
+        data['Close'] = scaler_close.fit_transform(data[['Close']])
+
+        # Scaler for other columns
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        data.iloc[:, 2:] = scaler.fit_transform(data.iloc[:, 2:])
+
+        X, Y = [], []
         for i in range(len(data) - lookback - 7):
-            inputs.append(data.iloc[i:i + lookback, 1:].values)
-            targets.append(data.iloc[i + lookback:i + lookback + 7, 1].values)
-        inputs, targets = np.array(inputs), np.array(targets)
+            X.append(data.iloc[i:i + lookback, 2:].values)  # All columns except 'Date' and 'Close'
+            Y.append(data['Close'].values[i + lookback:i + lookback + 7])
+        X, Y = np.array(X), np.array(Y)
 
-        # Use two different scalers for inputs and targets
-        input_scaler = MinMaxScaler(feature_range=(-1, 1))
-        target_scaler = MinMaxScaler(feature_range=(-1, 1))
+        # Convert to PyTorch tensors
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        Y_tensor = torch.tensor(Y, dtype=torch.float32)
 
-        inputs = np.array([input_scaler.fit_transform(x) for x in inputs])
-        targets = target_scaler.fit_transform(targets.reshape(-1, 7))
+        # Create PyTorch datasets and data loaders
+        dataset = TensorDataset(X_tensor, Y_tensor)
+        train_size = int((1 - validation_split) * len(dataset))
+        val_size = len(dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
 
-        inputs = torch.tensor(inputs, dtype=torch.float32)
-        targets = torch.tensor(targets, dtype=torch.float32)
-        dataset = TensorDataset(inputs, targets)
-        train_size = int(0.7 * len(dataset))
-        val_size = int(0.2 * len(dataset))
-        test_size = len(dataset) - train_size - val_size
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset,
-                                                                                 [train_size, val_size, test_size])
         train_loader = DataLoader(train_dataset, shuffle=False, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size)
-        test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
-        return input_scaler, train_loader, val_loader, test_loader, data['Close'].values
+
+        return scaler, scaler_close, train_loader, val_loader, data['Close'].values
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
@@ -107,7 +120,7 @@ class FinalCustomLSTMModelV2(nn.Module):
         for i in range(1, len(hidden_dims)):
             self.dropouts.append(nn.Dropout(dropouts[i - 1]))
             self.lstms.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
-        self.fc = nn.Linear(hidden_dims[-1], lookahead * num_features)
+        self.fc = nn.Linear(hidden_dims[-1], lookahead)
 
     def forward(self, x):
         for i, lstm in enumerate(self.lstms):
@@ -115,12 +128,14 @@ class FinalCustomLSTMModelV2(nn.Module):
             if i < len(self.dropouts):
                 x = self.dropouts[i](x)
         x = self.fc(x[:, -1, :])
-        return x.view(x.size(0), self.lookahead, -1)
+        return x
+
 
 def final_initialize_model_and_optimizer_v2(input_dim, hidden_dims, dropouts, lookahead, num_features):
     model = FinalCustomLSTMModelV2(input_dim=input_dim, hidden_dims=hidden_dims, dropouts=dropouts, lookahead=lookahead, num_features=num_features)
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    return model, optimizer
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.9)  # Decrease LR every 10 epochs by a factor of 0.9
+    return model, optimizer, scheduler
 
 # Checkpoint Management
 class CheckpointManager:
@@ -146,12 +161,13 @@ class CheckpointManager:
 
 # Trainer
 class ExtendedTrainer:
-    def __init__(self, model, optimizer, lookback, lookahead, window, step, checkpoint_manager):
+    def __init__(self, model, optimizer, scheduler, lookback, lookahead, window, step, checkpoint_manager):
         self.model = model
         self.optimizer = optimizer
         self.lookback = lookback
         self.lookahead = lookahead
         self.window = window
+        self.scheduler = scheduler
         self.step = step
         self.checkpoint_manager = checkpoint_manager
         self.criterion = nn.MSELoss()
@@ -194,6 +210,7 @@ class ExtendedTrainer:
             self.train_epoch(train_data)
             self.validate(val_data)
             self.checkpoint_manager.save_checkpoint(epoch, self.model, self.optimizer, self.training_loss[-1])
+            self.scheduler.step()  # Adjust the learning rate
         self.test(test_data)
 
 # Main Execution
@@ -211,7 +228,7 @@ os.makedirs(checkpoint_dir, exist_ok=True)
 scaler, train_loader, val_loader, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, batch_size)
 
 # Initialize model and optimizer
-model, optimizer = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
+model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
 
 # Move the model to GPU
 model.to('cuda:0')
@@ -220,7 +237,8 @@ model.to('cuda:0')
 checkpoint_manager = CheckpointManager(checkpoint_dir)
 
 # Train the model
-trainer = ExtendedTrainer(model, optimizer, lookback, 7, 30, 7, checkpoint_manager)
+trainer = ExtendedTrainer(model, optimizer, scheduler, lookback, 7, 30, 7, checkpoint_manager)
+
 
 try:
     trainer.train(train_loader, val_loader, test_loader, 100)  # Train for 100 epochs as an example
