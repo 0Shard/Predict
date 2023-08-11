@@ -69,24 +69,32 @@ class DataProcessor:
         data['Day'] = data['Date'].dt.day.astype(float)
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
+
+        # Fit the scaler on the entire dataset (excluding the 'Date' column)
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        scaler.fit(data.iloc[:, 1:].values)
+
         inputs, targets = [], []
         for i in range(len(data) - lookback - 7):
             inputs.append(data.iloc[i:i + lookback, 1:].values)
             targets.append(data.iloc[i + lookback:i + lookback + 7, 1].values)
-        inputs, targets = np.array(inputs), np.array(targets)
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        inputs = np.array([scaler.fit_transform(x) for x in inputs])
-        targets = scaler.transform(targets)
+
+        # Use the fitted scaler to transform the inputs and targets
+        inputs = np.array([scaler.transform(x) for x in inputs])
+        targets = scaler.transform(targets[:, np.newaxis])  # Reshape targets for compatibility
+
         inputs = torch.tensor(inputs, dtype=torch.float32)
         targets = torch.tensor(targets, dtype=torch.float32)
         dataset = TensorDataset(inputs, targets)
         train_size = int(0.7 * len(dataset))
         val_size = int(0.2 * len(dataset))
         test_size = len(dataset) - train_size - val_size
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
+        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset,
+                                                                                 [train_size, val_size, test_size])
         train_loader = DataLoader(train_dataset, shuffle=False, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size)
         test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
+
         return scaler, train_loader, val_loader, test_loader, data['Close'].values
 
 # LSTM Model
