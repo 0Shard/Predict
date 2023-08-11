@@ -80,63 +80,60 @@ class DataProcessor:
 
         return data_processed
 
-    def load_and_preprocess_data(self):
-        # Read CSV skipping the first row (header and title)
+    @staticmethod
+    def load_and_preprocess_data(filename, lookback, batch_size):
+        # Read CSV and preprocess
         data = pd.read_csv(filename, skiprows=1)
-        data = process_dataframe(data)
-        data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]  # Reordered columns
+        data = DataProcessor.process_dataframe(data)
+
+        # Select and reorder columns
+        data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
         data.columns = ['Date', 'Close', 'Open', 'High', 'Low', 'Volume', 'Turnover']
         data['Date'] = pd.to_datetime(data['Date'], format='%d/%m/%Y')
         data.sort_values(by='Date', ascending=True, inplace=True)
         data.reset_index(drop=True, inplace=True)
+
+        # Extract day, month, year as features
         data['Day'] = data['Date'].dt.day.astype(float)
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
 
-        data['Historical Close'] = data['Close'].shift(1)
-        data.dropna(inplace=True)
-        data['Historical Close'] = data['Historical Close'].shift(lookback)
-        data.drop(data.head(lookback).index, inplace=True)
-        data.dropna(inplace=True)
-
-        # Create a copy of the 'Close' column before scaling
-        data_for_plot = data['Close'].copy()
-
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler_close = MinMaxScaler(feature_range=(-1, 1))
-        data[['Open', 'High', 'Low', 'Volume', 'Turnover', 'Historical Close']] = scaler.fit_transform(
-            data[['Open', 'High', 'Low', 'Volume', 'Turnover', 'Historical Close']])
-        data[['Close']] = scaler_close.fit_transform(data[['Close']])
-
-        X, Y = [], []
+        # Create sequences for training
+        inputs = []
+        targets = []
         for i in range(len(data) - lookback - 7):
-            X.append(np.column_stack((data['Day'].values[i:(i + lookback)],
-                                      data['Month'].values[i:(i + lookback)],
-                                      data['Year'].values[i:(i + lookback)],
-                                      data['Open'].values[i:(i + lookback)],
-                                      data['High'].values[i:(i + lookback)],
-                                      data['Low'].values[i:(i + lookback)],
-                                      data['Volume'].values[i:(i + lookback)],
-                                      data['Turnover'].values[i:(i + lookback)],
-                                      data['Historical Close'].values[i:(i + lookback)])))
-            Y.append(data['Close'].values[(i + lookback):(i + lookback + 7)])
-        # Convert numpy arrays to PyTorch tensors
-        X, Y = torch.tensor(X, dtype=torch.float32), torch.tensor(Y, dtype=torch.float32)
+            inputs.append(data.iloc[i:i + lookback, 1:].values)
+            targets.append(
+                data.iloc[i + lookback:i + lookback + 7, 1].values)  # Predicting 'Close' prices for next 7 days
 
-        # Calculate split indices
-        total_size = len(X)
-        train_size = int(0.7 * total_size)
-        val_size = int(0.2 * total_size)
+        inputs, targets = np.array(inputs), np.array(targets)
 
-        X_train, Y_train = X[:train_size], Y[:train_size]
-        X_val, Y_val = X[train_size:train_size + val_size], Y[train_size:train_size + val_size]
-        X_test, Y_test = X[train_size + val_size:], Y[train_size + val_size:]
+        # Normalize the features
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        inputs = np.array([scaler.fit_transform(x) for x in inputs])
+        targets = scaler.transform(targets)
 
-        # Create DataLoader objects for training, validation, and test
-        train_dataset = DataLoader(TensorDataset(X_train, Y_train), batch_size=batch_size, shuffle=False)
-        val_dataset = DataLoader(TensorDataset(X_val, Y_val), batch_size=batch_size, shuffle=False)
-        test_dataset = DataLoader(TensorDataset(X_test, Y_test), batch_size=batch_size, shuffle=False)
-        return scaler, train_dataset, val_dataset, test_dataset, data_for_plot
+        # Convert to PyTorch tensors
+        inputs = torch.tensor(inputs, dtype=torch.float32)
+        targets = torch.tensor(targets, dtype=torch.float32)
+
+        # Create datasets
+        dataset = TensorDataset(inputs, targets)
+
+        # Split the data: 70% train, 20% validation, 10% test
+        train_size = int(0.7 * len(dataset))
+        val_size = int(0.2 * len(dataset))
+        test_size = len(dataset) - train_size - val_size
+
+        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset,
+                                                                                 [train_size, val_size, test_size])
+
+        # Create DataLoaders
+        train_loader = DataLoader(train_dataset, shuffle=False, batch_size=batch_size)
+        val_loader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size)
+        test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
+
+        return scaler, train_loader, val_loader, test_loader, data['Close'].values
 
 
 class CheckpointManager:
@@ -144,15 +141,13 @@ class CheckpointManager:
         self.folder_path = folder_path
 
     def save(self, epoch, model, optimizer, loss):
-        checkpoint = {
+        checkpoint_path = os.path.join(self.folder_path, f"checkpoint_{epoch}.tar")
+        torch.save({
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss
-        }
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-        torch.save(checkpoint, os.path.join(folder_path, f"checkpoint_{epoch}.pth"))
+            'loss': loss,
+        }, checkpoint_path)
 
     def load(self, checkpoint_path, model, optimizer):
         checkpoint = torch.load(checkpoint_path)
@@ -166,21 +161,26 @@ class CheckpointManager:
 class ModelManager:
     def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
         self.model = LSTMModel(input_dim, hidden_dim, num_layers, output_dim)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
         self.criterion = nn.MSELoss()
 
-    def train(self, train_dataset, val_dataset, num_epochs=100, start_from_checkpoint=None, checkpoint_manager=None):
-        # If starting from checkpoint, load the checkpoint
-        if start_from_checkpoint and checkpoint_manager:
-            self.model, self.optimizer, start_epoch, _ = checkpoint_manager.load(start_from_checkpoint)
-        else:
-            start_epoch = 0
-
+    def train(self, train_dataset, val_dataset, checkpoint_manager=None, start_epoch=0, num_epochs=100):
         # TODO: Actual Training Loop Here
+        pass
 
-        # Placeholder for saving checkpoint (use actual loss value later)
-        if checkpoint_manager:
-            checkpoint_manager.save(epoch, self.model, self.optimizer, 0.0)
+    def rolling_window_validation(self, data, initial_window, val_size, step_size, lookback):
+        total_length = len(data)
+        start_idx = 0
+
+        while (start_idx + initial_window + val_size) <= total_length:
+            train_window = data[start_idx:start_idx + initial_window]
+            val_window = data[start_idx + initial_window:start_idx + initial_window + val_size]
+
+            # Here, train the model on train_window and validate on val_window
+            # Note: Both train_window and val_window should be divided into sequences based on lookback and prediction days (7 days)
+            # TODO: Training and Validation on the windows
+
+            start_idx += step_size
 
 
 class LSTMModel(nn.Module):
@@ -191,29 +191,26 @@ class LSTMModel(nn.Module):
 
     def forward(self, x):
         out, _ = self.lstm(x)
-        out = self.fc(out[:, -1, :])
+        out = self.fc(out[:, -1, :])  # Taking the last output to predict the next 7 days
         return out
 
 
 def main():
     # Paths and Hyperparameters
     FILE_PATH = "your_file.csv"
-    LOOKBACK = 10
+    LOOKBACK = 30
     BATCH_SIZE = 32
     CHECKPOINT_FOLDER = "checkpoints"
-    NUM_EPOCHS = 100
 
     # Data Processing
-    data_processor = DataProcessor(filename=FILE_PATH, lookback=LOOKBACK, batch_size=BATCH_SIZE)
-    scaler, train_dataset, val_dataset, test_dataset, data_for_plot = data_processor.load_and_preprocess_data()
+    _, train_dataset, val_dataset, test_dataset, _ = DataProcessor.load_and_preprocess_data(FILE_PATH, LOOKBACK, BATCH_SIZE)
 
     # Checkpoint Management
     checkpoint_manager = CheckpointManager(folder_path=CHECKPOINT_FOLDER)
 
-    # Model Training
-    model_manager = ModelManager(input_dim=9, hidden_dim=50, num_layers=1, output_dim=1)
-    model_manager.train(train_dataset, val_dataset, num_epochs=NUM_EPOCHS, checkpoint_manager=checkpoint_manager)
-
+    # Model Training using Rolling Window Validation
+    model_manager = ModelManager(input_dim=9, hidden_dim=50, num_layers=1, output_dim=7)  # Updated output_dim to predict for 7 days
+    # Call the training function here
 
 if __name__ == "__main__":
     main()
