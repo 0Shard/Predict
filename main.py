@@ -213,9 +213,19 @@ class ExtendedTrainer:
         avg_val_loss = total_val_loss / len(val_loader)
         return avg_val_loss
 
-    def test(self, test_data):
-        # Placeholder for now. You can expand this to evaluate the model on test data.
-        pass
+    def test(self, test_loader):
+        self.model.eval()
+        total_test_loss = 0.0
+        with torch.no_grad():
+            for sequences_tensor, targets_tensor in test_loader:
+                sequences_tensor = sequences_tensor.to('cuda:0')
+                targets_tensor = targets_tensor.to('cuda:0')
+                outputs = self.model(sequences_tensor)
+                loss = self.criterion(outputs, targets_tensor)
+                total_test_loss += loss.item()
+        avg_test_loss = total_test_loss / len(test_loader)
+        print(f"Test Loss: {avg_test_loss:.4f}")
+        return avg_test_loss
 
     def train(self, train_loaders, val_loaders, test_loader, num_epochs):
         start_epoch = 0
@@ -277,3 +287,5 @@ except RuntimeError as e:
 
 # Save the model after training
 torch.save(model.state_dict(), "final_model.pth")
+
+trainer.test(test_loader)
