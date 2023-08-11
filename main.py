@@ -183,16 +183,28 @@ class ModelManager:
             start_idx += step_size
 
 
-class LSTMModel(nn.Module):
+class CustomLSTMModel(nn.Module):
     def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
-        super(LSTMModel, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True)
+        super(CustomLSTMModel, self).__init__()
+        self.lstm1 = nn.LSTM(input_dim, hidden_dims[0], batch_first=True)
+        self.dropout1 = nn.Dropout(dropouts[0])
+
+        self.lstm2 = nn.LSTM(hidden_dims[0], hidden_dims[1], batch_first=True)
+        self.dropout2 = nn.Dropout(dropouts[1])
+
+        self.lstm3 = nn.LSTM(hidden_dims[1], hidden_dims[2], batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        out, _ = self.lstm(x)
-        out = self.fc(out[:, -1, :])  # Taking the last output to predict the next 7 days
-        return out
+        x, _ = self.lstm1(x)
+        x = self.dropout1(x)
+
+        x, _ = self.lstm2(x)
+        x = self.dropout2(x)
+
+        x, _ = self.lstm3(x)
+        x = self.fc(x[:, -1, :])  # Taking the last output to predict the next 7 days
+        return x
 
 
 def main():
@@ -201,6 +213,10 @@ def main():
     LOOKBACK = 30
     BATCH_SIZE = 32
     CHECKPOINT_FOLDER = "checkpoints"
+    INPUT_DIM = 9
+    HIDDEN_DIMS = [32, 64, 64]
+    DROPOUTS = [0.2, 0.2]
+    OUTPUT_DIM = 7
 
     # Data Processing
     _, train_dataset, val_dataset, test_dataset, _ = DataProcessor.load_and_preprocess_data(FILE_PATH, LOOKBACK, BATCH_SIZE)
@@ -209,8 +225,9 @@ def main():
     checkpoint_manager = CheckpointManager(folder_path=CHECKPOINT_FOLDER)
 
     # Model Training using Rolling Window Validation
-    model_manager = ModelManager(input_dim=9, hidden_dim=50, num_layers=1, output_dim=7)  # Updated output_dim to predict for 7 days
+    lstm_model = CustomLSTMModel(input_dim=INPUT_DIM, hidden_dims=HIDDEN_DIMS, dropouts=DROPOUTS, output_dim=OUTPUT_DIM)
     # Call the training function here
+
 
 if __name__ == "__main__":
     main()
