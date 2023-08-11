@@ -1,233 +1,208 @@
-import pandas as pd
-import numpy as np
-import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import pandas as pd
+import os
+from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
-from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+from torch.utils.data import TensorDataset, DataLoader
 
+# --- Data Preprocessing ---
 
 class DataProcessor:
-    def __init__(self, filename, lookback, batch_size=32):
-        self.filename = filename
-        self.lookback = lookback
-        self.batch_size = batch_size
 
     @staticmethod
     def convert_string_to_float(s, i=None, j=None):
-
-        # Check if string contains non-numeric characters (excluding comma and period)
         for char in s:
             if not (char.isdigit() or char in ',.'):
                 raise ValueError(f"String contains non-numeric characters at row {i}, column {j}")
 
-        # Count periods and commas in the string
         period_count = s.count('.')
         comma_count = s.count(',')
 
-        # For 'Όγκος' column
         if period_count > 1 and comma_count == 0:
-            # Remove periods (thousands separators) and convert to float
             s = s.replace('.', '')
             return float(s)
-        # For 'Τζίρος' column
         elif period_count > 1 and comma_count == 1:
-            # Remove periods (thousands separators), replace comma with period (decimal point) and convert to float
             s = s.replace('.', '').replace(',', '.')
             return float(s)
-        # For the rest of the columns
         else:
-            # Replace comma with period (decimal point) and convert to float
             s = s.replace(',', '.')
             return float(s)
 
     @staticmethod
     def process_dataframe(data):
-
-        # Make a copy of the original dataframe to avoid modifying it directly
         data_processed = data.copy()
-
-        # Identify rows with NaN values
         nan_rows = data_processed.isnull().any(axis=1)
-
-        # Collect indices of rows with NaN values
         nan_indices = [i for i, is_nan in enumerate(nan_rows) if is_nan]
-
-        # Print row indices and drop rows
         for i in nan_indices:
             print(f"Row {i} contains NaN. Deleting the row.")
         data_processed.drop(nan_indices, inplace=True)
-
-        # Reset dataframe index after dropping rows
         data_processed.reset_index(drop=True, inplace=True)
 
-        # Loop over rows
         for i, row in data_processed.iterrows():
-            # Loop over columns
             for j, cell in enumerate(row):
-                # Skip the first (index 0) and third (index 2) columns
                 if j not in [0, 2]:
                     try:
-                        # Try to convert the cell to a float
                         if pd.isna(cell):
                             print(f"NaN found at row {i}, column {j}")
                         else:
-                            data_processed.iat[i, j] = convert_string_to_float(str(cell), i, j)
+                            data_processed.iat[i, j] = DataProcessor.convert_string_to_float(str(cell), i, j)
                     except ValueError as e:
-                        # If a ValueError is raised, add information about the row and column
                         raise ValueError(f"Error in row {i}, column {j}: {e}")
-
         return data_processed
 
     @staticmethod
     def load_and_preprocess_data(filename, lookback, batch_size):
-        # Read CSV and preprocess
         data = pd.read_csv(filename, skiprows=1)
         data = DataProcessor.process_dataframe(data)
-
-        # Select and reorder columns
         data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
         data.columns = ['Date', 'Close', 'Open', 'High', 'Low', 'Volume', 'Turnover']
         data['Date'] = pd.to_datetime(data['Date'], format='%d/%m/%Y')
         data.sort_values(by='Date', ascending=True, inplace=True)
         data.reset_index(drop=True, inplace=True)
-
-        # Extract day, month, year as features
         data['Day'] = data['Date'].dt.day.astype(float)
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
-
-        # Create sequences for training
-        inputs = []
-        targets = []
+        inputs, targets = [], []
         for i in range(len(data) - lookback - 7):
             inputs.append(data.iloc[i:i + lookback, 1:].values)
-            targets.append(
-                data.iloc[i + lookback:i + lookback + 7, 1].values)  # Predicting 'Close' prices for next 7 days
-
+            targets.append(data.iloc[i + lookback:i + lookback + 7, 1].values)
         inputs, targets = np.array(inputs), np.array(targets)
-
-        # Normalize the features
         scaler = MinMaxScaler(feature_range=(-1, 1))
         inputs = np.array([scaler.fit_transform(x) for x in inputs])
         targets = scaler.transform(targets)
-
-        # Convert to PyTorch tensors
         inputs = torch.tensor(inputs, dtype=torch.float32)
         targets = torch.tensor(targets, dtype=torch.float32)
-
-        # Create datasets
         dataset = TensorDataset(inputs, targets)
-
-        # Split the data: 70% train, 20% validation, 10% test
         train_size = int(0.7 * len(dataset))
         val_size = int(0.2 * len(dataset))
         test_size = len(dataset) - train_size - val_size
-
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset,
-                                                                                 [train_size, val_size, test_size])
-
-        # Create DataLoaders
+        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
         train_loader = DataLoader(train_dataset, shuffle=False, batch_size=batch_size)
         val_loader = DataLoader(val_dataset, shuffle=False, batch_size=batch_size)
         test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
-
         return scaler, train_loader, val_loader, test_loader, data['Close'].values
 
+# LSTM Model
+class FinalCustomLSTMModelV2(nn.Module):
+    def __init__(self, input_dim, hidden_dims, dropouts, lookahead, num_features):
+        super(FinalCustomLSTMModelV2, self).__init__()
+        self.hidden_dims = hidden_dims
+        self.lookahead = lookahead
+        self.lstms = nn.ModuleList()
+        self.dropouts = nn.ModuleList()
+        self.lstms.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
+        for i in range(1, len(hidden_dims)):
+            self.dropouts.append(nn.Dropout(dropouts[i - 1]))
+            self.lstms.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
+        self.fc = nn.Linear(hidden_dims[-1], lookahead * num_features)
 
+    def forward(self, x):
+        for i, lstm in enumerate(self.lstms):
+            x, _ = lstm(x)
+            if i < len(self.dropouts):
+                x = self.dropouts[i](x)
+        x = self.fc(x[:, -1, :])
+        return x.view(x.size(0), self.lookahead, -1)
+
+def final_initialize_model_and_optimizer_v2(input_dim, hidden_dims, dropouts, lookahead, num_features):
+    model = FinalCustomLSTMModelV2(input_dim=input_dim, hidden_dims=hidden_dims, dropouts=dropouts, lookahead=lookahead, num_features=num_features)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    return model, optimizer
+
+# Checkpoint Management
 class CheckpointManager:
-    def __init__(self, folder_path):
-        self.folder_path = folder_path
+    def __init__(self, checkpoint_dir):
+        self.checkpoint_dir = checkpoint_dir
 
-    def save(self, epoch, model, optimizer, loss):
-        checkpoint_path = os.path.join(self.folder_path, f"checkpoint_{epoch}.tar")
-        torch.save({
+    def save_checkpoint(self, epoch, model, optimizer, loss):
+        checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-        }, checkpoint_path)
+            'loss': loss
+        }
+        torch.save(checkpoint, os.path.join(self.checkpoint_dir, f"epoch_{epoch}.tar"))
 
-    def load(self, checkpoint_path, model, optimizer):
-        checkpoint = torch.load(checkpoint_path)
+    def load_checkpoint(self, checkpoint_file, model, optimizer):
+        checkpoint = torch.load(checkpoint_file)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         epoch = checkpoint['epoch']
         loss = checkpoint['loss']
-        return model, optimizer, epoch, loss
+        return epoch, loss
 
-
-class ModelManager:
-    def __init__(self, input_dim, hidden_dim, num_layers, output_dim):
-        self.model = LSTMModel(input_dim, hidden_dim, num_layers, output_dim)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
+# Trainer
+class ExtendedTrainer:
+    def __init__(self, model, optimizer, lookback, lookahead, window, step, checkpoint_manager):
+        self.model = model
+        self.optimizer = optimizer
+        self.lookback = lookback
+        self.lookahead = lookahead
+        self.window = window
+        self.step = step
+        self.checkpoint_manager = checkpoint_manager
         self.criterion = nn.MSELoss()
+        self.training_loss = []
 
-    def train(self, train_dataset, val_dataset, checkpoint_manager=None, start_epoch=0, num_epochs=100):
-        # TODO: Actual Training Loop Here
+    def train_epoch(self, train_loader):
+        self.model.train()
+        total_loss = 0
+        for sequences_tensor, targets_tensor in train_loader:
+            outputs = self.model(sequences_tensor)
+            loss = self.criterion(outputs, targets_tensor)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+        self.training_loss.append(avg_loss)
+
+    def validate(self, val_data):
+        # Placeholder for now. You can expand this to evaluate the model on validation data.
         pass
 
-    def rolling_window_validation(self, data, initial_window, val_size, step_size, lookback):
-        total_length = len(data)
-        start_idx = 0
+    def test(self, test_data):
+        # Placeholder for now. You can expand this to evaluate the model on test data.
+        pass
 
-        while (start_idx + initial_window + val_size) <= total_length:
-            train_window = data[start_idx:start_idx + initial_window]
-            val_window = data[start_idx + initial_window:start_idx + initial_window + val_size]
+    def train(self, train_data, val_data, test_data, num_epochs):
+        start_epoch = 0
+        continue_training = input("Would you like to continue training from a checkpoint? (yes/no): ").strip().lower()
+        if continue_training == 'yes':
+            checkpoint_file = input("Please provide the path to the checkpoint file: ")
+            start_epoch, _ = self.checkpoint_manager.load_checkpoint(checkpoint_file, self.model, self.optimizer)
 
-            # Here, train the model on train_window and validate on val_window
-            # Note: Both train_window and val_window should be divided into sequences based on lookback and prediction days (7 days)
-            # TODO: Training and Validation on the windows
+        for epoch in range(start_epoch, num_epochs):
+            self.train_epoch(train_data)
+            self.validate(val_data)
+            self.checkpoint_manager.save_checkpoint(epoch, self.model, self.optimizer, self.training_loss[-1])
+        self.test(test_data)
 
-            start_idx += step_size
+# Main Execution
+csv_file_path = input("Please provide the path to the CSV file: ")
+checkpoint_dir = input("Please provide the directory for saving checkpoints: ")
+lookback = 30
+batch_size = 32
 
+# Ensure the checkpoint directory exists
+os.makedirs(checkpoint_dir, exist_ok=True)
 
-class CustomLSTMModel(nn.Module):
-    def __init__(self, input_dim, hidden_dims, dropouts, output_dim):
-        super(CustomLSTMModel, self).__init__()
-        self.lstm1 = nn.LSTM(input_dim, hidden_dims[0], batch_first=True)
-        self.dropout1 = nn.Dropout(dropouts[0])
+# Load and preprocess data
+scaler, train_loader, val_loader, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, batch_size)
 
-        self.lstm2 = nn.LSTM(hidden_dims[0], hidden_dims[1], batch_first=True)
-        self.dropout2 = nn.Dropout(dropouts[1])
+# Initialize model and optimizer
+model, optimizer = final_initialize_model_and_optimizer_v2(9, [32, 64, 64], [0.2, 0.2], 7, 9)
 
-        self.lstm3 = nn.LSTM(hidden_dims[1], hidden_dims[2], batch_first=True)
-        self.fc = nn.Linear(hidden_dims[2], output_dim)
+# Create checkpoint manager
+checkpoint_manager = CheckpointManager(checkpoint_dir)
 
-    def forward(self, x):
-        x, _ = self.lstm1(x)
-        x = self.dropout1(x)
+# Train the model
+trainer = ExtendedTrainer(model, optimizer, 30, 7, 30, 7, checkpoint_manager)
+trainer.train(train_loader, val_loader, test_loader, 100)  # Train for 100 epochs as an example
 
-        x, _ = self.lstm2(x)
-        x = self.dropout2(x)
-
-        x, _ = self.lstm3(x)
-        x = self.fc(x[:, -1, :])  # Taking the last output to predict the next 7 days
-        return x
-
-
-def main():
-    # Paths and Hyperparameters
-    FILE_PATH = "your_file.csv"
-    LOOKBACK = 30
-    BATCH_SIZE = 32
-    CHECKPOINT_FOLDER = "checkpoints"
-    INPUT_DIM = 9
-    HIDDEN_DIMS = [32, 64, 64]
-    DROPOUTS = [0.2, 0.2]
-    OUTPUT_DIM = 7
-
-    # Data Processing
-    _, train_dataset, val_dataset, test_dataset, _ = DataProcessor.load_and_preprocess_data(FILE_PATH, LOOKBACK, BATCH_SIZE)
-
-    # Checkpoint Management
-    checkpoint_manager = CheckpointManager(folder_path=CHECKPOINT_FOLDER)
-
-    # Model Training using Rolling Window Validation
-    lstm_model = CustomLSTMModel(input_dim=INPUT_DIM, hidden_dims=HIDDEN_DIMS, dropouts=DROPOUTS, output_dim=OUTPUT_DIM)
-    # Call the training function here
-
-
-if __name__ == "__main__":
-    main()
+# Save the model after training
+torch.save(model.state_dict(), "final_model.pth")
