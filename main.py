@@ -81,7 +81,8 @@ class DataProcessor:
 
         # Use the fitted scaler to transform the inputs and targets
         inputs = np.array([scaler.transform(x) for x in inputs])
-        targets = scaler.transform(targets[:, np.newaxis])  # Reshape targets for compatibility
+        targets = np.array(targets)
+        targets = scaler.transform(targets.reshape(-1, 7))
 
         inputs = torch.tensor(inputs, dtype=torch.float32)
         targets = torch.tensor(targets, dtype=torch.float32)
