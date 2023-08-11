@@ -72,12 +72,13 @@ class DataProcessor:
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
 
-        # Shift all columns except 'Close'
-        for column in ['Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
-            data[f'Historical {column}'] = data[column].shift(lookback)
+        # Shift columns by only one day to create historical columns
+        for column in ['Close', 'Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
+            data[f'Historical {column}'] = data[column].shift(1)
 
-        data.drop(data.head(lookback).index, inplace=True)
-        data.dropna(inplace=True)
+        # Drop the first row since it will contain NaN for the shifted columns
+        data.drop(0, inplace=True)
+        data.reset_index(drop=True, inplace=True)
 
         # Use a separate scaler for 'Close'
         scaler_close = MinMaxScaler(feature_range=(-1, 1))
@@ -89,8 +90,8 @@ class DataProcessor:
 
         X, Y = [], []
         for i in range(len(data) - lookback - 7):
-            X.append(data.iloc[i:i + lookback, 2:].values)  # All columns except 'Date' and 'Close'
-            Y.append(data['Close'].values[i + lookback:i + lookback + 7])
+            X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
+            Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
         X, Y = np.array(X), np.array(Y)
 
         # Convert to PyTorch tensors
@@ -119,7 +120,7 @@ class DataProcessor:
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
-    def __init__(self, input_dim, hidden_dims, dropouts, lookahead, num_features):
+    def __init__(self, input_dim, hidden_dims, dropouts, lookahead):
         super(FinalCustomLSTMModelV2, self).__init__()
         self.hidden_dims = hidden_dims
         self.lookahead = lookahead
@@ -136,12 +137,12 @@ class FinalCustomLSTMModelV2(nn.Module):
             x, _ = lstm(x)
             if i < len(self.dropouts):
                 x = self.dropouts[i](x)
-        x = self.fc(x[:, -1, :])
+        x = self.fc(x[:, -1, :])  # Take the last output from the LSTM sequence
         return x
 
 
-def final_initialize_model_and_optimizer_v2(input_dim, hidden_dims, dropouts, lookahead, num_features):
-    model = FinalCustomLSTMModelV2(input_dim=input_dim, hidden_dims=hidden_dims, dropouts=dropouts, lookahead=lookahead, num_features=num_features)
+def final_initialize_model_and_optimizer_v2(input_dim, hidden_dims, dropouts, lookahead):
+    model = FinalCustomLSTMModelV2(input_dim=input_dim, hidden_dims=hidden_dims, dropouts=dropouts, lookahead=lookahead)
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     scheduler = StepLR(optimizer, step_size=10, gamma=0.9)  # Decrease LR every 10 epochs by a factor of 0.9
     return model, optimizer, scheduler
