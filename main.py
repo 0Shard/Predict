@@ -102,12 +102,14 @@ class DataProcessor:
         dataset = TensorDataset(X_tensor, Y_tensor)
         train_size = int(0.7 * len(dataset))
         val_size = int(0.2 * len(dataset))
+        test_size = len(dataset) - train_size - val_size
+
         train_end = train_size
         val_end = train_end + val_size
 
         train_dataset = torch.utils.data.Subset(dataset, range(0, train_end))
         val_dataset = torch.utils.data.Subset(dataset, range(train_end, val_end))
-        test_dataset = torch.utils.data.Subset(dataset, range(val_end, len(dataset)))
+        test_dataset = torch.utils.data.Subset(dataset, range(val_end, val_end + test_size))
 
         # Rolling window for train and validation
         train_loaders, val_loaders = [], []
