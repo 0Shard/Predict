@@ -122,7 +122,7 @@ class DataProcessor:
 
         test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
-        return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
+        return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values, data
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
@@ -160,10 +160,10 @@ csv_file_path = input("Please provide the path to the CSV file for prediction: "
 lookback = 28
 
 # Load and preprocess data for prediction
-scaler, scaler_close, _, _, _, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 28, 7)
+scaler, scaler_close, _, _, _, close_values, data = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 28, 7)
 
 # Using the last lookback days for prediction
-input_data = close_values[-lookback:]
+input_data = data.iloc[-lookback:, 2:-7].values  # Take all features, excluding future Close values
 input_tensor = torch.tensor(input_data.reshape(1, lookback, -1), dtype=torch.float32).to('cuda:0')
 
 # Predict future close prices
