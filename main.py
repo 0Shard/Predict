@@ -78,17 +78,16 @@ class DataProcessor:
         if len(data) <= 5000:
             raise ValueError("Dataset size should be greater than 5000 data points")
 
-        # Your existing logic for creating X and Y arrays and converting them to tensors goes here
-            # Create the X, Y arrays
-            X, Y = [], []
-            for i in range(len(data) - lookback - 7):
-                X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
-                Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
-            X, Y = np.array(X), np.array(Y)
+        # Create the X, Y arrays
+        X, Y = [], []
+        for i in range(len(data) - lookback - 7):
+            X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
+            Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
+        X, Y = np.array(X), np.array(Y)
 
-            # Convert to PyTorch tensors
-            X_tensor = torch.tensor(X, dtype=torch.float32)
-            Y_tensor = torch.tensor(Y, dtype=torch.float32)
+        # Convert to PyTorch tensors
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        Y_tensor = torch.tensor(Y, dtype=torch.float32)
 
         # Create PyTorch datasets and data loaders
         dataset = TensorDataset(X_tensor, Y_tensor)
