@@ -72,7 +72,21 @@ class DataProcessor:
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
 
-        # Your existing logic for historical columns goes here
+        # Shift columns by only one day to create historical columns
+        for column in ['Close', 'Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
+            data[f'Historical {column}'] = data[column].shift(1)
+
+        # Drop the first row since it will contain NaN for the shifted columns
+        data.drop(0, inplace=True)
+        data.reset_index(drop=True, inplace=True)
+
+        # Use a separate scaler for 'Close'
+        scaler_close = MinMaxScaler(feature_range=(-1, 1))
+        data['Close'] = scaler_close.fit_transform(data[['Close']])
+
+        # Scaler for other columns
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        data.iloc[:, 2:] = scaler.fit_transform(data.iloc[:, 2:])
 
         # Ensure the dataset size is greater than 5000 points
         if len(data) <= 5000:
@@ -119,6 +133,7 @@ class DataProcessor:
         test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
         return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
+
 
 
 # LSTM Model
