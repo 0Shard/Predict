@@ -72,31 +72,23 @@ class DataProcessor:
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
 
-        # Shift columns by only one day to create historical columns
-        for column in ['Close', 'Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
-            data[f'Historical {column}'] = data[column].shift(1)
+        # Your existing logic for historical columns goes here
 
-        # Drop the first row since it will contain NaN for the shifted columns
-        data.drop(0, inplace=True)
-        data.reset_index(drop=True, inplace=True)
+        # Ensure the dataset size is greater than 5000 points
+        if len(data) <= 5000:
+            raise ValueError("Dataset size should be greater than 5000 data points")
 
-        # Use a separate scaler for 'Close'
-        scaler_close = MinMaxScaler(feature_range=(-1, 1))
-        data['Close'] = scaler_close.fit_transform(data[['Close']])
+        # Your existing logic for creating X and Y arrays and converting them to tensors goes here
+            # Create the X, Y arrays
+            X, Y = [], []
+            for i in range(len(data) - lookback - 7):
+                X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
+                Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
+            X, Y = np.array(X), np.array(Y)
 
-        # Scaler for other columns
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        data.iloc[:, 2:] = scaler.fit_transform(data.iloc[:, 2:])
-
-        X, Y = [], []
-        for i in range(len(data) - lookback - 7):
-            X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
-            Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
-        X, Y = np.array(X), np.array(Y)
-
-        # Convert to PyTorch tensors
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-        Y_tensor = torch.tensor(Y, dtype=torch.float32)
+            # Convert to PyTorch tensors
+            X_tensor = torch.tensor(X, dtype=torch.float32)
+            Y_tensor = torch.tensor(Y, dtype=torch.float32)
 
         # Create PyTorch datasets and data loaders
         dataset = TensorDataset(X_tensor, Y_tensor)
@@ -111,20 +103,24 @@ class DataProcessor:
         val_dataset = torch.utils.data.Subset(dataset, range(train_end, val_end))
         test_dataset = torch.utils.data.Subset(dataset, range(val_end, val_end + test_size))
 
-        # Rolling window for train and validation
-        train_loaders, val_loaders = [], []
+        # Rolling window for train
+        train_loaders = []
         for start_idx in range(0, len(train_dataset) - window_size + 1, step_size):
             train_end_idx = start_idx + window_size
-            val_end_idx = min(start_idx + window_size,
-                              len(val_dataset))  # Ensure the end index does not exceed the length of val_dataset
             train_subset = torch.utils.data.Subset(train_dataset, range(start_idx, train_end_idx))
-            val_subset = torch.utils.data.Subset(val_dataset, range(start_idx, val_end_idx))
             train_loaders.append(DataLoader(train_subset, shuffle=False, batch_size=batch_size))
-            val_loaders.append(DataLoader(val_subset, shuffle=False, batch_size=batch_size))
-            test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
+        # Adjust rolling window logic for validation
+        val_loaders = []
+        for start_idx in range(0, len(val_dataset) - window_size + 1, step_size):
+            val_end_idx = start_idx + window_size
+            val_subset = torch.utils.data.Subset(val_dataset, range(start_idx, val_end_idx))
+            val_loaders.append(DataLoader(val_subset, shuffle=False, batch_size=batch_size))
+
+        test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
         return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
+
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
@@ -264,14 +260,23 @@ csv_file_path = input("Please provide the path to the CSV file: ")
 checkpoint_dir = input("Please provide the directory for saving checkpoints: ")
 
 # Define lookback and batch_size
-lookback = 30
+lookback = 28
 batch_size = 32
+window_size = 28
 
 # Ensure the checkpoint directory exists
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 # Load and preprocess data
-scaler, scaler_close, train_loaders, val_loaders, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 30, 7, batch_size)
+scaler, scaler_close, train_loaders, val_loaders, test_loader, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, window_size, 7, batch_size)
+
+# 1. Check the length of each val_loader in val_loaders
+val_loader_lengths = [len(loader.dataset) for loader in val_loaders]
+print("Lengths of val_loaders:", val_loader_lengths)
+
+# 2. Check if any subset used to create a DataLoader has a length smaller than the window size or close to zero
+short_subsets = [len(loader.dataset) for loader in val_loaders if len(loader.dataset) < window_size]
+print("Short subsets:", short_subsets)
 
 # Initialize model and optimizer
 model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(10, [32, 64, 64], [0.2, 0.2], 7)
