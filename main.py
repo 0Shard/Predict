@@ -100,8 +100,8 @@ class DataProcessor:
 
         # Create PyTorch datasets and data loaders
         dataset = TensorDataset(X_tensor, Y_tensor)
-        train_size = int(0.7 * len(dataset))
-        val_size = int(0.2 * len(dataset))
+        train_size = int(0.6 * len(dataset))
+        val_size = int(0.3 * len(dataset))
         test_size = len(dataset) - train_size - val_size
 
         train_end = train_size
@@ -114,13 +114,15 @@ class DataProcessor:
         # Rolling window for train and validation
         train_loaders, val_loaders = [], []
         for start_idx in range(0, len(train_dataset) - window_size + 1, step_size):
-            end_idx = start_idx + window_size
-            train_subset = torch.utils.data.Subset(train_dataset, range(start_idx, end_idx))
-            val_subset = torch.utils.data.Subset(val_dataset, range(start_idx, end_idx))
+            train_end_idx = start_idx + window_size
+            val_end_idx = min(start_idx + window_size,
+                              len(val_dataset))  # Ensure the end index does not exceed the length of val_dataset
+            train_subset = torch.utils.data.Subset(train_dataset, range(start_idx, train_end_idx))
+            val_subset = torch.utils.data.Subset(val_dataset, range(start_idx, val_end_idx))
             train_loaders.append(DataLoader(train_subset, shuffle=False, batch_size=batch_size))
             val_loaders.append(DataLoader(val_subset, shuffle=False, batch_size=batch_size))
+            test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
-        test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
         return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
 
@@ -130,16 +132,16 @@ class FinalCustomLSTMModelV2(nn.Module):
         super(FinalCustomLSTMModelV2, self).__init__()
         self.hidden_dims = hidden_dims
         self.lookahead = lookahead
-        self.lstms = nn.ModuleList()
+        self.lstm = nn.ModuleList()
         self.dropouts = nn.ModuleList()
-        self.lstms.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
+        self.lstm.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
         for i in range(1, len(hidden_dims)):
             self.dropouts.append(nn.Dropout(dropouts[i - 1]))
             self.lstms.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
         self.fc = nn.Linear(hidden_dims[-1], lookahead)
 
     def forward(self, x):
-        for i, lstm in enumerate(self.lstms):
+        for i, lstm in enumerate(self.lstm):
             x, _ = lstm(x)
             if i < len(self.dropouts):
                 x = self.dropouts[i](x)
