@@ -137,7 +137,7 @@ class FinalCustomLSTMModelV2(nn.Module):
         self.lstm.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
         for i in range(1, len(hidden_dims)):
             self.dropouts.append(nn.Dropout(dropouts[i - 1]))
-            self.lstms.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
+            self.lstm.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
         self.fc = nn.Linear(hidden_dims[-1], lookahead)
 
     def forward(self, x):
