@@ -314,6 +314,7 @@ except RuntimeError as e:
         raise e
 
 # Save the model after training
-torch.save(model.state_dict(), "final_model.pth")
+save_path = input("Please provide the path where you'd like to save the trained model: ")
+torch.save(model.state_dict(), save_path)
 
 trainer.test(test_loader)
