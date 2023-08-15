@@ -72,14 +72,6 @@ class DataProcessor:
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
 
-        # Shift columns by only one day to create historical columns
-        for column in ['Close', 'Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
-            data[f'Historical {column}'] = data[column].shift(1)
-
-        # Drop the first row since it will contain NaN for the shifted columns
-        data.drop(0, inplace=True)
-        data.reset_index(drop=True, inplace=True)
-
         # Use a separate scaler for 'Close'
         scaler_close = MinMaxScaler(feature_range=(-1, 1))
         data['Close'] = scaler_close.fit_transform(data[['Close']])
@@ -95,7 +87,7 @@ class DataProcessor:
         # Create the X, Y arrays
         X, Y = [], []
         for i in range(len(data) - lookback - 7):
-            X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
+            X.append(data.iloc[i:i + lookback, 2:].values)  # Historical data
             Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
         X, Y = np.array(X), np.array(Y)
 
@@ -144,11 +136,16 @@ class FinalCustomLSTMModelV2(nn.Module):
         self.lookahead = lookahead
         self.lstm = nn.ModuleList()
         self.dropouts = nn.ModuleList()
+
+        # First LSTM layer
         self.lstm.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
         for i in range(1, len(hidden_dims)):
             self.dropouts.append(nn.Dropout(dropouts[i - 1]))
             self.lstm.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
+
+        # Fully connected layer
         self.fc = nn.Linear(hidden_dims[-1], lookahead)
+        self.tanh = nn.Tanh()  # Activation function
 
     def forward(self, x):
         for i, lstm in enumerate(self.lstm):
@@ -156,12 +153,13 @@ class FinalCustomLSTMModelV2(nn.Module):
             if i < len(self.dropouts):
                 x = self.dropouts[i](x)
         x = self.fc(x[:, -1, :])  # Take the last output from the LSTM sequence
+        x = self.tanh(x)  # Apply the tanh activation function
         return x
 
 
 def final_initialize_model_and_optimizer_v2(input_dim, hidden_dims, dropouts, lookahead):
     model = FinalCustomLSTMModelV2(input_dim=input_dim, hidden_dims=hidden_dims, dropouts=dropouts, lookahead=lookahead)
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     scheduler = StepLR(optimizer, step_size=10, gamma=0.9)  # Decrease LR every 10 epochs by a factor of 0.9
     return model, optimizer, scheduler
 
@@ -198,53 +196,78 @@ class ExtendedTrainer:
         self.scheduler = scheduler
         self.step = step
         self.checkpoint_manager = checkpoint_manager
-        self.criterion = nn.MSELoss()
-        self.training_loss = []
+        self.criterion_mse = nn.MSELoss()  # MSE Loss
+        self.training_loss_mse = []
+
+    def compute_metrics(self, outputs, targets):
+        mse_loss = self.criterion_mse(outputs, targets)
+        mae_loss = torch.mean(torch.abs(outputs - targets))
+        rmse_loss = torch.sqrt(mse_loss)
+        return mae_loss, mse_loss, rmse_loss
 
     def train_epoch(self, train_loader):
         self.model.train()
-        total_loss = 0
+        total_mse_loss = 0
         for sequences_tensor, targets_tensor in train_loader:
             # Move tensors to GPU
             sequences_tensor = sequences_tensor.to('cuda:0')
             targets_tensor = targets_tensor.to('cuda:0')
 
             outputs = self.model(sequences_tensor)
-            loss = self.criterion(outputs, targets_tensor)
+            _, mse_loss, _ = self.compute_metrics(outputs, targets_tensor)
             self.optimizer.zero_grad()
-            loss.backward()
+            mse_loss.backward()
             self.optimizer.step()
-            total_loss += loss.item()
+            total_mse_loss += mse_loss.item()
 
-        avg_loss = total_loss / len(train_loader)
-        self.training_loss.append(avg_loss)
+        avg_mse_loss = total_mse_loss / len(train_loader)
+        self.training_loss_mse.append(avg_mse_loss)
 
     def validate(self, val_loader):
         self.model.eval()
-        total_val_loss = 0.0
+        total_mae_loss = 0.0
+        total_mse_loss = 0.0
+        total_rmse_loss = 0.0
         with torch.no_grad():
             for sequences_tensor, targets_tensor in val_loader:
                 sequences_tensor = sequences_tensor.to('cuda:0')
                 targets_tensor = targets_tensor.to('cuda:0')
                 outputs = self.model(sequences_tensor)
-                loss = self.criterion(outputs, targets_tensor)
-                total_val_loss += loss.item()
-        avg_val_loss = total_val_loss / len(val_loader)
-        return avg_val_loss
+                mae_loss, mse_loss, rmse_loss = self.compute_metrics(outputs, targets_tensor)
+                total_mae_loss += mae_loss.item()
+                total_mse_loss += mse_loss.item()
+                total_rmse_loss += rmse_loss.item()
+
+        avg_mae_loss = total_mae_loss / len(val_loader)
+        avg_mse_loss = total_mse_loss / len(val_loader)
+        avg_rmse_loss = total_rmse_loss / len(val_loader)
+
+        return avg_mae_loss, avg_mse_loss, avg_rmse_loss
 
     def test(self, test_loader):
         self.model.eval()
-        total_test_loss = 0.0
+        total_mae_loss = 0.0
+        total_mse_loss = 0.0
+        total_rmse_loss = 0.0
         with torch.no_grad():
             for sequences_tensor, targets_tensor in test_loader:
                 sequences_tensor = sequences_tensor.to('cuda:0')
                 targets_tensor = targets_tensor.to('cuda:0')
                 outputs = self.model(sequences_tensor)
-                loss = self.criterion(outputs, targets_tensor)
-                total_test_loss += loss.item()
-        avg_test_loss = total_test_loss / len(test_loader)
-        print(f"Test Loss: {avg_test_loss:.4f}")
-        return avg_test_loss
+                mae_loss, mse_loss, rmse_loss = self.compute_metrics(outputs, targets_tensor)
+                total_mae_loss += mae_loss.item()
+                total_mse_loss += mse_loss.item()
+                total_rmse_loss += rmse_loss.item()
+
+        avg_mae_loss = total_mae_loss / len(test_loader)
+        avg_mse_loss = total_mse_loss / len(test_loader)
+        avg_rmse_loss = total_rmse_loss / len(test_loader)
+
+        print(f"Test MAE: {avg_mae_loss:.4f}")
+        print(f"Test MSE: {avg_mse_loss:.4f}")
+        print(f"Test RMSE: {avg_rmse_loss:.4f}")
+
+        return avg_mae_loss, avg_mse_loss, avg_rmse_loss
 
     def train(self, train_loaders, val_loaders, test_loader, num_epochs):
         start_epoch = 0
@@ -293,7 +316,7 @@ short_subsets = [len(loader.dataset) for loader in val_loaders if len(loader.dat
 print("Short subsets:", short_subsets)
 
 # Initialize model and optimizer
-model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(10, [32, 64, 64], [0.2, 0.2], 7)
+model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(10, [10, 10, 10, 10, 10, 10, 10], [0.2, 0.2, 0.2, 0.2, 0.2, 0.2], 7)
 
 # Move the model to GPU
 model.to('cuda:0')
