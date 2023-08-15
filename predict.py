@@ -76,9 +76,9 @@ class DataProcessor:
 
         # Create the X, Y arrays
         X, Y = [], []
-        for i in range(len(data) - lookback - 7):
-            X.append(data.iloc[i:i + lookback, 2:].values)  # Historical data
-            Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
+        for i in range(len(data) - lookback - 7):  # 7 days lookahead for target
+            X.append(data.iloc[i:i + lookback, 1:].values)  # Using all columns starting from 'Close' for training data
+            Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values as target
         X, Y = np.array(X), np.array(Y)
 
         # Convert to PyTorch tensors
