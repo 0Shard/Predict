@@ -242,6 +242,10 @@ class ExtendedTrainer:
         avg_mse_loss = total_mse_loss / len(val_loader)
         avg_rmse_loss = total_rmse_loss / len(val_loader)
 
+        print(f"Validation MAE: {avg_mae_loss:.4f}")
+        print(f"Validation MSE: {avg_mse_loss:.4f}")
+        print(f"Validation RMSE: {avg_rmse_loss:.4f}")
+
         return avg_mae_loss, avg_mse_loss, avg_rmse_loss
 
     def test(self, test_loader):
@@ -277,17 +281,26 @@ class ExtendedTrainer:
             start_epoch, _ = self.checkpoint_manager.load_checkpoint(checkpoint_file, self.model, self.optimizer)
 
         for epoch in range(start_epoch, num_epochs):
-            total_val_loss = 0.0
+            total_val_mae_loss = 0.0
+            total_val_mse_loss = 0.0
+            total_val_rmse_loss = 0.0
+
             # Use each rolling window for training and validation
             for train_loader, val_loader in zip(train_loaders, val_loaders):
                 self.train_epoch(train_loader)
-                val_loss = self.validate(val_loader)
-                total_val_loss += val_loss
+                val_mae_loss, val_mse_loss, val_rmse_loss = self.validate(val_loader)
+                total_val_mae_loss += val_mae_loss
+                total_val_mse_loss += val_mse_loss
+                total_val_rmse_loss += val_rmse_loss
 
-            avg_val_loss = total_val_loss / len(val_loaders)
-            print(f"Epoch {epoch}/{num_epochs} - Avg Validation Loss: {avg_val_loss:.4f}")
+            avg_val_mae_loss = total_val_mae_loss / len(val_loaders)
+            avg_val_mse_loss = total_val_mse_loss / len(val_loaders)
+            avg_val_rmse_loss = total_val_rmse_loss / len(val_loaders)
 
-            self.checkpoint_manager.save_checkpoint(epoch, self.model, self.optimizer, self.training_loss[-1])
+            print(
+                f"Epoch {epoch}/{num_epochs} - Avg Validation MAE Loss: {avg_val_mae_loss:.4f}, Avg Validation MSE Loss: {avg_val_mse_loss:.4f}, Avg Validation RMSE Loss: {avg_val_rmse_loss:.4f}")
+
+            self.checkpoint_manager.save_checkpoint(epoch, self.model, self.optimizer, avg_val_mse_loss)
             self.scheduler.step()  # Adjust the learning rate
 
         self.test(test_loader)
