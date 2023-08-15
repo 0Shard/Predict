@@ -50,7 +50,7 @@ class DataProcessor:
         return data_processed
 
     @staticmethod
-    def load_and_preprocess_data(filename, lookback, window_size, step_size, batch_size=32):
+    def load_and_preprocess_data(filename, lookback, window_size, step_size, batch_size=35):
         data = pd.read_csv(filename, skiprows=1)
         data = DataProcessor.process_dataframe(data)
         data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
@@ -61,14 +61,6 @@ class DataProcessor:
         data['Day'] = data['Date'].dt.day.astype(float)
         data['Month'] = data['Date'].dt.month.astype(float)
         data['Year'] = data['Date'].dt.year.astype(float)
-
-        # Shift columns by only one day to create historical columns
-        for column in ['Close', 'Open', 'High', 'Low', 'Volume', 'Turnover', 'Day', 'Month', 'Year']:
-            data[f'Historical {column}'] = data[column].shift(1)
-
-        # Drop the first row since it will contain NaN for the shifted columns
-        data.drop(0, inplace=True)
-        data.reset_index(drop=True, inplace=True)
 
         # Use a separate scaler for 'Close'
         scaler_close = MinMaxScaler(feature_range=(-1, 1))
@@ -85,7 +77,7 @@ class DataProcessor:
         # Create the X, Y arrays
         X, Y = [], []
         for i in range(len(data) - lookback - 7):
-            X.append(data.iloc[i:i + lookback, 2:-7].values)  # Historical data except future Close values
+            X.append(data.iloc[i:i + lookback, 2:].values)  # Historical data
             Y.append(data['Close'].values[i + lookback:i + lookback + 7])  # Future 7 Close values
         X, Y = np.array(X), np.array(Y)
 
@@ -122,7 +114,8 @@ class DataProcessor:
 
         test_loader = DataLoader(test_dataset, shuffle=False, batch_size=batch_size)
 
-        return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values, data
+        return scaler, scaler_close, train_loaders, val_loaders, test_loader, data['Close'].values
+
 
 # LSTM Model
 class FinalCustomLSTMModelV2(nn.Module):
@@ -132,11 +125,16 @@ class FinalCustomLSTMModelV2(nn.Module):
         self.lookahead = lookahead
         self.lstm = nn.ModuleList()
         self.dropouts = nn.ModuleList()
+
+        # First LSTM layer
         self.lstm.append(nn.LSTM(input_dim, hidden_dims[0], batch_first=True))
         for i in range(1, len(hidden_dims)):
             self.dropouts.append(nn.Dropout(dropouts[i - 1]))
             self.lstm.append(nn.LSTM(hidden_dims[i - 1], hidden_dims[i], batch_first=True))
+
+        # Fully connected layer
         self.fc = nn.Linear(hidden_dims[-1], lookahead)
+        self.tanh = nn.Tanh()  # Activation function
 
     def forward(self, x):
         for i, lstm in enumerate(self.lstm):
@@ -144,11 +142,13 @@ class FinalCustomLSTMModelV2(nn.Module):
             if i < len(self.dropouts):
                 x = self.dropouts[i](x)
         x = self.fc(x[:, -1, :])  # Take the last output from the LSTM sequence
+        x = self.tanh(x)  # Apply the tanh activation function
         return x
+
 
 # Load the trained model
 model_path = input("Please provide the path to the trained model: ")
-model = FinalCustomLSTMModelV2(input_dim=10, hidden_dims=[32, 64, 64], dropouts=[0.2, 0.2], lookahead=7)
+model = FinalCustomLSTMModelV2(input_dim=10, hidden_dims=[10, 10, 10, 10, 10, 10, 10], dropouts=[0.2, 0.2, 0.2, 0.2, 0.2, 0.2], lookahead=7)
 model.load_state_dict(torch.load(model_path))
 model.to('cuda:0')
 model.eval()
@@ -159,11 +159,11 @@ csv_file_path = input("Please provide the path to the CSV file for prediction: "
 # Define lookback
 lookback = 28
 
-# Load and preprocess data for prediction
-scaler, scaler_close, _, _, _, close_values, data = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 28, 7)
+# Load and preprocess data for prediction using DataProcessor from the first part
+scaler, scaler_close, _, _, _, close_values = DataProcessor.load_and_preprocess_data(csv_file_path, lookback, 28, 7)
 
 # Using the last lookback days for prediction
-input_data = data.iloc[-lookback:, 2:-7].values  # Take all features, excluding future Close values
+input_data = close_values[-lookback:]  # Take the last 'lookback' days
 input_tensor = torch.tensor(input_data.reshape(1, lookback, -1), dtype=torch.float32).to('cuda:0')
 
 # Predict future close prices

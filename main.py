@@ -60,7 +60,7 @@ class DataProcessor:
         return data_processed
 
     @staticmethod
-    def load_and_preprocess_data(filename, lookback, window_size, step_size, batch_size=32):
+    def load_and_preprocess_data(filename, lookback, window_size, step_size, batch_size=35):
         data = pd.read_csv(filename, skiprows=1)
         data = DataProcessor.process_dataframe(data)
         data = data.iloc[:, [0, 1, 3, 4, 5, 6, 7]]
@@ -298,7 +298,7 @@ checkpoint_dir = input("Please provide the directory for saving checkpoints: ")
 
 # Define lookback and batch_size
 lookback = 28
-batch_size = 32
+batch_size = 35
 window_size = 28
 
 # Ensure the checkpoint directory exists
@@ -325,7 +325,7 @@ model.to('cuda:0')
 checkpoint_manager = CheckpointManager(checkpoint_dir)
 
 # Train the model
-trainer = ExtendedTrainer(model, optimizer, scheduler, lookback, 7, 30, 7, checkpoint_manager)
+trainer = ExtendedTrainer(model, optimizer, scheduler, lookback, 7, 28, 7, checkpoint_manager)
 
 
 try:
