@@ -316,7 +316,7 @@ short_subsets = [len(loader.dataset) for loader in val_loaders if len(loader.dat
 print("Short subsets:", short_subsets)
 
 # Initialize model and optimizer
-model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(10, [10, 10, 10, 10, 10, 10, 10], [0.2, 0.2, 0.2, 0.2, 0.2, 0.2], 7)
+model, optimizer, scheduler = final_initialize_model_and_optimizer_v2(9, [10, 10, 10, 10, 10, 10, 10], [0.2, 0.2, 0.2, 0.2, 0.2, 0.2], 7)
 
 # Move the model to GPU
 model.to('cuda:0')
