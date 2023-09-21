@@ -148,7 +148,7 @@ class FinalCustomLSTMModelV2(nn.Module):
 
 # Load the trained model
 model_path = input("Please provide the path to the trained model: ")
-model = FinalCustomLSTMModelV2(input_dim=9, hidden_dims=[10, 10, 10, 10, 10, 10, 10], dropouts=[0.2, 0.2, 0.2, 0.2, 0.2, 0.2], lookahead=7)
+model = FinalCustomLSTMModelV2(input_dim=9, hidden_dims=[9, 9, 9, 9, 9, 9, 9], dropouts=[0.2, 0.2, 0.2, 0.2, 0.2, 0.2], lookahead=7)
 model.load_state_dict(torch.load(model_path))
 model.to('cuda:0')
 model.eval()
